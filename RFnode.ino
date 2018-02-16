@@ -35,14 +35,15 @@ static void do_sleep(unsigned int seconds_to_sleep)
 
 static RTC_DS3231 rtc;
 
-static bool pre_send(rflib_msg_t *msg, int32_t data)
+static bool pre_send(rflib_msg_t *msg, int32_t data, uint32_t timestamp)
 {
   static at_ac_tuwien_iot1718_N2C msg_to_send = at_ac_tuwien_iot1718_N2C_init_zero;
+  msg_to_send.timestamp = timestamp;
   msg_to_send.roomNo = node_config.room_number;
   msg_to_send.type = node_config.sensor_type;
   msg_to_send.data = data;
 
-  static pb_ostream_t stream = pb_ostream_from_buffer(msg->data, RFLIB_MAX_MSGSIZE);
+  pb_ostream_t stream = pb_ostream_from_buffer(msg->data, RFLIB_MAX_MSGSIZE);
   bool enc_res = pb_encode(&stream, at_ac_tuwien_iot1718_N2C_fields, &msg_to_send);
   msg->size = enc_res ? stream.bytes_written : 0;
   return enc_res;
@@ -51,7 +52,7 @@ static bool pre_send(rflib_msg_t *msg, int32_t data)
 static bool post_recv(rflib_msg_t *msg, uint32_t *timestamp)
 {
   static at_ac_tuwien_iot1718_C2N msg_to_recv;
-  static pb_istream_t stream = pb_istream_from_buffer(msg->data, msg->size);
+  pb_istream_t stream = pb_istream_from_buffer(msg->data, msg->size);
   bool dec_res = pb_decode(&stream, at_ac_tuwien_iot1718_C2N_fields, &msg_to_recv);
   *timestamp = dec_res ? msg_to_recv.timestamp : 0;
   return dec_res;
@@ -88,7 +89,7 @@ void loop(void)
   static struct rflib_msg_t ackmsg;
 
   /* TODO */
-  if (!pre_send(&msg, millis())) {
+  if (!pre_send(&msg, millis(), rtc.now().unixtime())) {
     printf("Encoding failed :(\n\r");
   }
   
