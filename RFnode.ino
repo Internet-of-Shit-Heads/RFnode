@@ -97,7 +97,8 @@ void loop(void)
   if (rflib_sensor_tx(&msg, &ackmsg) < 0) {
     printf("Send failed :(\n\r");
   } else {
-    printf("Sent :), acklen = %d, ackmsg = \"%s\"\n\r", ackmsg.size, ackmsg.data);
+    printf("Sent :)\n\r");
+    printf("Got ACK with %d bytes.\n\r", ackmsg.size);
   }
   rflib_sensor_tx_post();
 
@@ -105,7 +106,12 @@ void loop(void)
   if (!post_recv(&ackmsg, &updated_ts)) {
     printf("Decoding failed :(\n\r");
   } else {
-    rtc.adjust(DateTime(updated_ts));
+    printf("%d\n\r", updated_ts);
+    DateTime now = DateTime(updated_ts);
+    rtc.adjust(now);
+    printf("New time: %04d/%02d/%02d %02d:%02d:%02d\n",
+           now.year(), now.month(), now.day(),
+           now.hour(), now.minute(), now.second());
   }
 
   Serial.flush();
