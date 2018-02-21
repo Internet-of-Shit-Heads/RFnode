@@ -5,71 +5,57 @@
 #include <SPI.h>
 #include "nRF24L01.h"
 #include "RF24.h"
-#include "printf.h"
 #include <Wire.h>
 #include "RTClib.h"
 #include <avr/sleep.h>
+#include <cryptlib.h>
+#include <cfglib.h>
 
-struct sensor_info {
-  uint16_t id;
-  at_ac_tuwien_iot1718_N2C_SensorType type;
-  uint8_t pin;
-  uint8_t degree;
-  float *poly;
-  bool emulated;
-  float min;
-  float max;
-};
-
-static struct sensor_info emulated_temperature = {
+const struct sensor_info emulated_temperature = {
   .id = 0,
   .type = at_ac_tuwien_iot1718_N2C_SensorType_TEMPERATURE,
   .pin = 255,
   .degree = 0,
   .poly = NULL,
-  .emulated = true,
-  .min = -20,
-  .max = 40
 };
 
-static struct sensor_info emulated_humidity = {
+const struct sensor_info emulated_humidity = {
   .id = 1,
   .type = at_ac_tuwien_iot1718_N2C_SensorType_HUMIDITY,
   .pin = 255,
   .degree = 0,
   .poly = NULL,
-  .emulated = true,
-  .min = 0,
-  .max = 100
 };
 
 // linear, needs calibration
-static float humidity_poly[] = { 0, 1 };
-static struct sensor_info real_humidity = {
+const float humidity_poly[] = { 0, 1 };
+const struct sensor_info real_humidity = {
   .id = 2,
   .type = at_ac_tuwien_iot1718_N2C_SensorType_HUMIDITY,
-  .pin = 2,
+  .pin = 3,
   .degree = 1,
   .poly = humidity_poly,
 };
 
-#define N_SENSORS  3
+const struct sensor_info *const sensors[] = { &emulated_temperature , &emulated_humidity, &real_humidity };
+const struct rfnode_config node_config = {
+  .address = 0xF0F0F0F0E1LL,
+  .room_number = 7,
+  .node_id = 1,
+  .wakeup_interval = 1,
+  .baud_rate = 57600,
+  .cepin = 9,
+  .cspin = 10,
+  .channel = 0,
+  .delay = 15,
+  .retransmits = 15,
+  .auth_key = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+  .sensors = sensors,
+};
 
-static struct {
-  uint64_t address = 0xF0F0F0F0E1LL;
-  uint32_t room_number = 7;
-  uint32_t node_id = 1;
-  unsigned int wakeup_interval = 1;
-  unsigned int baud_rate = 57600;
-  uint16_t cepin = 9;
-  uint16_t cspin = 10;
-  uint8_t channel = 0;
-  uint8_t delay = 15;
-  uint8_t retransmits = 15;
-  struct sensor_info sensors[N_SENSORS] = { emulated_temperature, emulated_humidity, real_humidity };
-} node_config;
+#define N_SENSORS (sizeof(sensors) / sizeof(struct sensor_info *))
 
-static float calc_poly(float *coeff, uint8_t degree, float x)
+static float calc_poly(const float *coeff, uint8_t degree, float x)
 {
   float y = 0;
   float xi = 1;
@@ -93,12 +79,10 @@ static void do_sleep(unsigned int seconds_to_sleep)
   }
 }
 
-static RTC_DS3231 rtc;
-
 static bool pre_send(rflib_msg_t *msg, uint16_t id, at_ac_tuwien_iot1718_N2C_SensorType type,
                      float data, uint32_t timestamp)
 {
-  static at_ac_tuwien_iot1718_N2C msg_to_send = at_ac_tuwien_iot1718_N2C_init_zero;
+  at_ac_tuwien_iot1718_N2C msg_to_send = at_ac_tuwien_iot1718_N2C_init_zero;
   msg_to_send.timestamp = timestamp;
   msg_to_send.roomNo = node_config.room_number;
   msg_to_send.nodeId = node_config.node_id;
@@ -114,28 +98,29 @@ static bool pre_send(rflib_msg_t *msg, uint16_t id, at_ac_tuwien_iot1718_N2C_Sen
 
 static bool post_recv(rflib_msg_t *msg, uint32_t *timestamp)
 {
-  static at_ac_tuwien_iot1718_C2N msg_to_recv;
+  at_ac_tuwien_iot1718_C2N msg_to_recv;
   pb_istream_t stream = pb_istream_from_buffer(msg->data, msg->size);
   bool dec_res = pb_decode(&stream, at_ac_tuwien_iot1718_C2N_fields, &msg_to_recv);
   *timestamp = dec_res ? msg_to_recv.timestamp : 0;
   return dec_res;
 }
 
+static RTC_DS3231 rtc;
+
 void setup(void)
 {
   Serial.begin(node_config.baud_rate);
-  printf_begin();
   
   if (rflib_sensor_init(node_config.cepin, node_config.cspin,
                         node_config.channel, node_config.address,
                         node_config.delay, node_config.retransmits) < 0) {
-    printf("Init failed :(\n\r");
+    Serial.println(F("Init failed :("));
     abort();
   }
 
   rtc.begin();
   if (rtc.lostPower()) {
-    Serial.println("RTC lost power, resetting time!");
+    Serial.println(F("RTC lost power, resetting time!"));
     rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
   }
 
@@ -148,13 +133,13 @@ void setup(void)
   rtc.writeSqwPinMode(DS3231_SquareWave1Hz);
   pinMode(2, INPUT_PULLUP);
   attachInterrupt(0, rtc_interrupt, FALLING);
+  
+  Serial.flush();
 }
 
 void loop(void)
 {
   static struct rflib_msg_t msgs[N_SENSORS];
-  static struct rflib_msg_t emptymsg = { .size = 0 };
-  static struct rflib_msg_t ackmsgs[N_SENSORS + 1];
   static uint32_t last_ts;
   DateTime now = rtc.now();
 
@@ -162,9 +147,9 @@ void loop(void)
   int encoded = 0;
   for (i = 0; i < N_SENSORS; i++) {
     float sensor_value;
-    struct sensor_info *sensor = &node_config.sensors[i];
-    if (sensor->emulated) {
-      sensor_value = random(sensor->min, sensor->max);
+    const struct sensor_info *sensor = node_config.sensors[i];
+    if (sensor->pin == 255) {
+      sensor_value = random(0, 1023);
     } else {
       sensor_value = analogRead(sensor->pin);
     }
@@ -176,13 +161,26 @@ void loop(void)
       real_value = calc_poly(sensor->poly, sensor->degree, sensor_value);
     }
 
-    /* printf doesn't support floats, so we cast to int */
-    printf("Sensor %d: value = %d\n\r", sensor->id, (int) real_value);
+    Serial.print(F("Sensor "));
+    Serial.print(sensor->id);
+    Serial.println(F(":"));
 
-    if (!pre_send(&msgs[encoded], sensor->id, sensor->type, real_value, now.unixtime())) {
-      printf("Sensor %d: Encoding failed :(\n\r", sensor->id);
+    Serial.print(F("  value = "));
+    Serial.println((int)real_value);
+
+    struct rflib_msg_t *msg = &msgs[encoded];
+    if (!pre_send(msg, sensor->id, sensor->type, real_value, now.unixtime())) {
+      Serial.println(F("  Encoding failed :("));
       continue;
     }
+
+    int authed_size = cryptlib_auth(msg->data, msg->size,
+                                    RFLIB_MAX_MSGSIZE, node_config.auth_key);
+    if (authed_size < 0) {
+      Serial.println(F("  Auth failed :("));
+      continue;
+    }
+    msg->size = authed_size;
 
     encoded++;
   }
@@ -190,25 +188,32 @@ void loop(void)
   rflib_sensor_tx_pre();
   int acks = 0;
   for (i = 0; i < encoded; i++) {
-    if (rflib_sensor_tx(&msgs[i], &ackmsgs[acks]) < 0) {
-      printf("Message %d: Send failed :(\n\r", i);
+    Serial.print(F("Message "));
+    Serial.print(i);
+    Serial.println(F(":"));
+    
+    if (rflib_sensor_tx(&msgs[i], &msgs[acks]) < 0) {
+      Serial.println(F("  Send failed :("));
       continue;
     }
-    printf("Message %d: Sent :)\n\r", i);
+    Serial.println(F("  Sent :)"));
     
-    if (ackmsgs[acks].size == 0) {
-      printf("Message %d: No ACK :(\n\r", i);
+    if (msgs[acks].size == 0) {
+      Serial.println(F("  No ACK :("));
       continue;
     }
     
-    printf("Message %d: Got ACK with %d bytes.\n\r", i, ackmsgs[acks].size);
+    Serial.print(F("  Got ACK with "));
+    Serial.print(msgs[acks].size);
+    Serial.println(F(" bytes."));
     acks++;
   }
 
   /* no message sent (or none got through), try empty msg to get ACK */
   if (acks == 0) {
-    if (rflib_sensor_tx(&emptymsg, &ackmsgs[acks]) < 0) {
-      printf("No messages got through :(, don't have an ACK.\n\r");
+    memset(&msgs[0], 0, sizeof(msgs[0]));
+    if (rflib_sensor_tx(&msgs[0], &msgs[0]) < 0) {
+      Serial.println(F("No messages got through :(, don't have an ACK."));
     } else {
       acks++;
     }
@@ -217,18 +222,32 @@ void loop(void)
 
   uint32_t updated_ts = last_ts;
   for (i = 0; i < acks; i++) {
+    Serial.print(F("ACK "));
+    Serial.print(i);
+    Serial.println(F(":"));
+
+    struct rflib_msg_t *msg = &msgs[i];
+
+    int verified_size = cryptlib_verify(msg->data, msg->size, node_config.auth_key);
+    if (verified_size < 0) {
+      Serial.println(F("  Verify failed :("));
+      continue;
+    }
+    msg->size = verified_size;
+
     uint32_t ack_ts;
-    if (!post_recv(&ackmsgs[i], &ack_ts)) {
-      printf("ACK %d: Decoding failed :(\n\r", i);
+    if (!post_recv(msg, &ack_ts)) {
+      Serial.println(F("  Decoding failed :("));
       continue;
     }
 
     if (ack_ts <= last_ts) {
-      printf("ACK %d: Stale timestamp :(\n\r", i);
+      Serial.println(F("  Stale timestamp :("));
       continue;
     }
 
     if (ack_ts > updated_ts) {
+      Serial.println(F("  accepted :)"));
       updated_ts = ack_ts;
       
       /* TODO: apply command */
@@ -238,9 +257,18 @@ void loop(void)
   if (updated_ts != last_ts) {
     now = DateTime(updated_ts);
     rtc.adjust(now);
-    printf("New time: %04d/%02d/%02d %02d:%02d:%02d\n",
-           now.year(), now.month(), now.day(),
-           now.hour(), now.minute(), now.second());
+    Serial.print(F("New time: "));
+    Serial.print(now.year());
+    Serial.print(F("/"));
+    Serial.print(now.month());
+    Serial.print(F("/"));
+    Serial.print(now.day());
+    Serial.print(F(" "));
+    Serial.print(now.hour());
+    Serial.print(F(":"));
+    Serial.print(now.minute());
+    Serial.print(F(":"));
+    Serial.println(now.second());
   }
 
   Serial.flush();
