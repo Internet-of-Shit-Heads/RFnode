@@ -1,6 +1,6 @@
 //#define DEBUG_HARD_OFF
-#define CFG_SENSORS sensors_node2
-#define CFG_CURRENT cfg_node2
+#define CFG_SENSORS sensors_node1
+#define CFG_CURRENT cfg_node1
 
 #include <sensordata.pb.h>
 #include <pb_decode.h>
@@ -15,30 +15,32 @@
 #include <cryptlib.h>
 #include <cfglib.h>
 
+const float emulated_temperature_poly[] = { -20.0, 70.0/1023.0 };
 const struct sensor_info emulated_temperature = {
   .id = 0,
   .type = at_ac_tuwien_iot1718_N2C_SensorType_TEMPERATURE,
   .pin = 255,
-  .degree = 0,
-  .poly = NULL,
+  .degree = 1,
+  .poly = emulated_temperature_poly,
 };
 
+const float emulated_humidity_poly[] = { 0.0, 100.0/1023.0 };
 const struct sensor_info emulated_humidity = {
   .id = 1,
   .type = at_ac_tuwien_iot1718_N2C_SensorType_HUMIDITY,
   .pin = 255,
-  .degree = 0,
-  .poly = NULL,
+  .degree = 1,
+  .poly = emulated_humidity_poly,
 };
 
 // linear, roughly percent (0 = dry, 100 = in water)
-const float humidity_poly[] = { 7500.0/39.0, -10.0/39.0 };
+const float real_humidity_poly[] = { 190.0, -1.0/4.0 };
 const struct sensor_info real_humidity = {
   .id = 2,
   .type = at_ac_tuwien_iot1718_N2C_SensorType_HUMIDITY,
   .pin = 3,
   .degree = 1,
-  .poly = humidity_poly,
+  .poly = real_humidity_poly,
 };
 
 const struct sensor_info *const sensors_node0[] = { &emulated_humidity };
@@ -210,6 +212,9 @@ void setup(void)
                         CFG_CURRENT.channel, CFG_CURRENT.address,
                         CFG_CURRENT.delay, CFG_CURRENT.retransmits) < 0) {
     DO_DEBUG(DEBUG_ERRORS) Serial.println(F("Init failed :("));
+    DO_DEBUG_AVAIL {
+      Serial.flush();
+    }
     abort();
   }
 
